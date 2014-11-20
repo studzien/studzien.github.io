@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=1024, user-scalable=no">
+
+  <title>Hack your own Erlang VM. Episode 1.</title>
+
+  <!-- Required stylesheet -->
+  <link rel="stylesheet" media="screen" href="core/deck.core.css">
+
+  <!-- Extension CSS files go here. Remove or add as needed. -->
+  <link rel="stylesheet" media="screen" href="extensions/goto/deck.goto.css">
+  <link rel="stylesheet" media="screen" href="extensions/menu/deck.menu.css">
+  <link rel="stylesheet" media="screen" href="extensions/navigation/deck.navigation.css">
+  <link rel="stylesheet" media="screen" href="extensions/status/deck.status.css">
+  <link rel="stylesheet" media="screen" href="extensions/scale/deck.scale.css">
+
+  <!-- Style theme. More available in /themes/style/ or create your own. -->
+  <link rel="stylesheet" media="screen" href="themes/style/swiss.css">
+
+  <style>
+      span.blue {
+          color: blue;
+          font-weight: bold;
+      }
+
+      span.red {
+          color: red;
+          font-weight: bold;
+      }
+
+      span.green {
+          color:green;
+          font-weight: bold;
+      }
+  </style>
+
+  <!-- Transition theme. More available in /themes/transition/ or create your own. -->
+  <link rel="stylesheet" media="screen" href="themes/transition/fade.css">
+
+  <!-- Basic black and white print styles -->
+  <link rel="stylesheet" media="print" href="core/print.css">
+
+  <!-- Required Modernizr file -->
+  <script src="modernizr.custom.js"></script>
+</head>
+<body>
+  <div class="deck-container">
+
+    <!-- Begin slides. Just make elements with a class of slide. -->
+
+    <section class="slide">
+    <h1>Hack your own Erlang VM.</h1>
+    </section>
+
+    <section class="slide">
+        <h2>List of episodes</h2>
+        <ol>
+            <li class="slide">BEAM files, basics of code loading, index tables</li>
+            <li class="slide">register vs. stack-based VM, bytecode interpreter</li>
+            <li class="slide">processes, basic scheduling</li>
+        </ol>
+    </section>
+
+
+    <section class="slide">
+        <h2>Life of a .erl file</h2>
+        <ol>
+            <li>your pretty Erlang module</li>
+            <li>preprocessing<br/><code>compile:file(File, ['P']).</code></li>
+            <li>expansion<br/><code>compile:file(File, ['E']).</code></li>
+            <li>Core Erlang<br/><code>compile:file(File, [to_core]).</code></li>
+            <li>Kernel Erlang<br/><code>compile:file(File, [to_kernel]).</code></li>
+            <li>Assembly<br/><code>compile:file(File, ['S']).</code></li>
+            <li>BEAM file<br/><code>compile:file(File).</code></li>
+        </ol>
+    </section>
+
+    <section class="slide">
+        <h2>Erlang source</h2>
+        <pre><code>-module(fac).
+-export([fac/1]).
+-include("fac.hrl").
+
+fac(N) ->
+    fac(N, #state{acc=1}).
+
+fac(0, #state{acc=Acc}) ->
+    Acc;
+fac(N, #state{acc=Acc}=State) ->
+    fac(N-1, State#state{acc=Acc*N}).
+</pre></code>
+        </section>
+
+        <section class="slide">
+        <h2>After preprocessing</h2>
+        <pre><code>-file("fac.erl", 1).
+
+-module(fac).
+
+-export([fac/1]).
+
+-file("fac.hrl", 1).
+
+-record(state,{acc}).
+
+-file("fac.erl", 6).
+
+fac(N) ->
+    fac(N, #state{acc = 1}).
+
+fac(0, #state{acc = Acc}) ->
+    Acc;
+fac(N, #state{acc = Acc} = State) ->
+    fac(N - 1, State#state{acc = Acc * N}
+</pre></code>
+        </section>
+
+        <section class="slide">
+        <h2>Expanded records (still Erlang)</h2>
+        <pre><code>-file("fac.erl", 1).
+-file("fac.hrl", 1).
+-file("fac.erl", 6).
+
+fac(N) ->
+    fac(N, {state,1}).
+
+fac(0, {state,Acc}) ->
+    Acc;
+fac(N, {state,Acc} = State) ->
+    fac(N - 1,
+        begin
+            rec0 = Acc * N,
+            rec1 = State,
+            case rec1 of
+                {state,rec2} ->
+                    {state,rec0};
+                _ ->
+                    error({badrecord,state})
+            end
+        end).
+
+module_info() ->
+    erlang:get_module_info(fac).
+
+module_info(X) ->
+    erlang:get_module_info(fac, X).
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Core Erlang</h2>
+        <pre><code>module 'fac' ['fac'/1,
+	      'module_info'/0,
+	      'module_info'/1]
+    attributes []
+'fac'/1 =
+    %% Line 7
+    fun (_cor0) ->
+	%% Line 8
+	apply 'fac'/2
+	    (_cor0, {'state',1})
+'fac'/2 =
+    %% Line 10
+    fun (_cor1,_cor0) ->
+	case <_cor1,_cor0> of
+	  <0,{'state',Acc}> when 'true' ->
+	      %% Line 11
+	      Acc
+	  %% Line 12
+	  <N,State = {'state',Acc}> when 'true' ->
+	      let <_cor6> =
+		  %% Line 13
+</code></pre>
+        </section>
+        
+         <section class="slide">
+            <h2>Kernel Erlang</h2>
+            <pre><code>module 'fac'
+export ['fac'/1,
+	'module_info'/0,
+	'module_info'/1]
+attributes []
+fdef 'fac'/1(_cor0) =
+  enter (local 'fac'/2)(_cor0, {state,1})
+fdef 'fac'/2(_cor1, _cor0) =
+  match _cor1,_cor0
+    alt
+      select _cor1
+	type k_int
+	  0 ->
+	    select _cor0
+	      type k_tuple
+		{_ker6,_ker5} ->
+		  select _ker6
+		    type k_atom
+		      'state' ->
+			<<_ker5>>
+      alt
+	select _cor0
+	  type k_tuple
+	    {_ker4,_ker3} ->
+	      select _ker4
+</code></pre>
+</section>
+
+        <section class="slide">
+        <h2>Assembly</h2>
+<pre><code>{module, fac}.  %% version = 0
+{exports, [{fac,1},{module_info,0},{module_info,1}]}.
+{attributes, []}.
+{labels, 10}.
+
+{function, fac, 1, 2}.
+  {label,1}.
+    {line,[{location,"fac.erl",7}]}.
+    {func_info,{atom,fac},{atom,fac},1}.
+  {label,2}.
+    {move,{literal,{state,1}},{x,1}}.
+    {call_only,2,{f,4}}.
+
+{function, fac, 2, 4}.
+  {label,3}.
+    {line,[{location,"fac.erl",10}]}.
+    {func_info,{atom,fac},{atom,fac},2}.
+  {label,4}.
+    {test,is_eq_exact,{f,5},[{x,0},{integer,0}]}.
+    {test,is_tuple,{f,3},[{x,1}]}.
+    {test,test_arity,{f,5},[{x,1},2]}.
+</pre></code>
+        </section>
+
+        <section class="slide">
+        <h2>BEAM file</h2>
+        <pre><code>
+<<70,79,82,49,
+  0,0,2,136,
+  66,69,65,77,
+  65,116,111,109,
+  0,0,0,53
+  ...>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>BEAM file</h2>
+        <pre><code>
+<<<strong>"FOR1"</strong>,
+  0,0,2,136,
+  66,69,65,77,
+  65,116,111,109,
+  0,0,0,53
+  ...>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>BEAM file</h2>
+        <pre><code>
+<<<strong>"FOR1"</strong>,
+  <strong>648:32</strong>,
+  66,69,65,77,
+  65,116,111,109,
+  0,0,0,53
+  ...>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>BEAM file</h2>
+        <pre><code>
+<<<strong>"FOR1"</strong>,
+  <strong>648:32</strong>,
+  <strong>"BEAM"</strong>,
+  65,116,111,109,
+  0,0,0,53
+  ...>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>BEAM file</h2>
+        <pre><code>
+<<<strong>"FOR1"</strong>,
+  <strong>648:32</strong>,
+  <strong>"BEAM"</strong>,
+  <strong>"Atom"</strong>,
+  0,0,0,53
+  ...>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Obligatory chunks</h2>
+        <ul>
+            <li><code>Atom</code> - atoms used by module</li>
+            <li><code>Code</code> - the actual bytecode</li>
+            <li><code>ImpT</code> - external functions used by module</li>
+            <li><code>ExpT</code> - functions exported by module</li>
+        </ul>
+        </section>
+
+        <section class="slide">
+        <h2>Other chunks</h2>
+        <ul>
+            <li><code>LocT</code> - local functions defined in module</li>
+            <li><code>FunT</code> - lambdas defined in module</li>
+            <li><code>LitT</code> - literals, in ETF, gzipped</li>
+            <li><code>Attr</code> - module attributes, in ETF</li>
+            <li><code>CInf</code> - compilation info, in ETF</li>
+            <li><code>Line</code> - source code line table (for stacktrace :))</li>
+            <li><code>Abst</code> - module AST</li>
+        </ul>
+        </section>
+
+    <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code>-module(fac).
+-export([fac/1]).
+-include("fac.hrl").
+
+fac(N) ->
+    fac(N, #state{acc=1}).
+
+fac(0, #state{acc=Acc}) ->
+    Acc;
+fac(N, #state{acc=Acc}=State) ->
+    fac(N-1, State#state{acc=Acc*N}).
+</pre></code>
+        </section>
+
+    <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code>-module(<span class="blue">fac</span>).
+-export([<span class="blue">fac</span>/1]).
+-include("fac.hrl").
+
+<span class="blue">fac</span>(N) ->
+    <strong><font color="blue">fac</strong></font>(N, #state{acc=1}).
+
+<span class="blue">fac</span>(0, #state{acc=Acc}) ->
+    Acc;
+<span class="blue">fac</span>(N, #state{acc=Acc}=State) ->
+    <span class="blue">fac</span>(N-1, State#state{acc=Acc*N}).
+</pre></code>
+        </section>
+
+    <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code>-module(<span class="blue">fac</span>).
+-export([<span class="blue">fac</span>/1]).
+-include("fac.hrl").
+
+<span class="blue">fac</span>(N) ->
+    <strong><font color="blue">fac</strong></font>(N, #<span class="red">state</span>{acc=1}).
+
+<span class="blue">fac</span>(0, #<span class="red">state</span>{acc=Acc}) ->
+    Acc;
+<span class="blue">fac</span>(N, #<span class="red">state</span>{acc=Acc}=State) ->
+    <span class="blue">fac</span>(N-1, State#<span class="red">state</span>{acc=Acc*N}).
+</pre></code>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code>
+<span class="blue">fac</span>(N) ->
+    <span class="blue">fac</span>(N, {<span class="red">state</span>,1}).
+
+<span class="blue">fac</span>(0, {<span class="red">state</span>,Acc}) ->
+    Acc;
+<span class="blue">fac</span>(N, {<span class="red">state</span>,Acc} = State) ->
+    fac(N - 1,
+        begin
+            rec0 = Acc * N,
+            rec1 = State,
+            case rec1 of
+                {<span class="red">state</span>,rec2} ->
+                    {<span class="red">state</span>,rec0};
+                _ ->
+                    error({badrecord,state})
+            end
+        end).
+
+module_info() ->
+    erlang:get_module_info(fac).
+
+module_info(X) ->
+    erlang:get_module_info(fac, X).
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <ul>
+            <li><code>fac</code></li>
+            <li><code>state</code></li>
+            <li><code>erlang</code></li>
+            <li><code>-</code></li>
+            <li><code>*</code></li>
+            <li><code>module_info</code></li>
+            <li><code>get_module_info</code></li>
+        </ul>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code><<0,0,0,7,
+  3,102,97,99,
+  5,115,116,97,116,101,
+  6,101,114,108,97,110,103,
+  1,45,
+  1,42,
+  11,109,111,100,117,108,101,95,105,110,102,111,
+  15,103,101,116,95,109,111,100,117,108,101,95,105,110,102,111>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code><<<strong>0,0,0,7</strong>,
+  3,102,97,99,
+  5,115,116,97,116,101,
+  6,101,114,108,97,110,103,
+  1,45,
+  1,42,
+  11,109,111,100,117,108,101,95,105,110,102,111,
+  15,103,101,116,95,109,111,100,117,108,101,95,105,110,102,111>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code><<<strong>0,0,0,7,</strong>
+  <span class="blue">3,"fac"</span>,
+  5,115,116,97,116,101,
+  6,101,114,108,97,110,103,
+  1,45,
+  1,42,
+  11,109,111,100,117,108,101,95,105,110,102,111,
+  15,103,101,116,95,109,111,100,117,108,101,95,105,110,102,111>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code><<<strong>0,0,0,7,</strong>
+  <span class="blue">3,"fac"</span>,
+  <span class="red">5,"state"</span>,
+  6,101,114,108,97,110,103,
+  1,45,
+  1,42,
+  11,109,111,100,117,108,101,95,105,110,102,111,
+  15,103,101,116,95,109,111,100,117,108,101,95,105,110,102,111>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code><<<strong>0,0,0,7,</strong>
+  <span class="blue">3,"fac"</span>,
+  <span class="red">5,"state"</span>,
+  <span class="green">6,"erlang"</span>,
+  1,45,
+  1,42,
+  11,109,111,100,117,108,101,95,105,110,102,111,
+  15,103,101,116,95,109,111,100,117,108,101,95,105,110,102,111>>
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code><strong>32> beam_lib:chunks(fac, ["Atom"]).</strong>
+{ok,{fac,[{"Atom",
+           <<0,0,0,7,3,102,97,99,5,115,116,97,116,101,6,101,114,
+             108,97,110,103,1,...>>}]}}
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Atoms</h2>
+        <pre><code><strong>33> beam_lib:chunks(fac, [atoms]).</strong>
+{ok,{fac,[{atoms,[{1,fac},
+                  {2,state},
+                  {3,erlang},
+                  {4,'-'},
+                  {5,'*'},
+                  {6,module_info},
+                  {7,get_module_info}]}]}}
+</code></pre>
+        </section>
+
+        <section class="slide">
+        <h2>Index tables</h2>
+        <ul>
+            <li class="slide">hash-table for keeping unique entries</li>
+            <li class="slide">array for keeping them in order</li>
+            <li class="slide">insert only</li>
+            <li class="slide">atoms recognized by the ERTS</li>
+            <li class="slide">function exported from modules</li>
+            <li class="slide">loaded modules</li>
+        </ul>
+        </section>
+
+        <section class="slide">
+        <h2>Index tables</h2>
+        <img src="imgs/atomtable.png">
+        </section>
+
+        <section class="slide">
+        <h2>Trivia time</h2>
+        <h3 class="slide">Q: Given a freshly started Erlang/OTP (17.3), how many atoms are loaded into the atom table?</h3>
+        <h3 class="slide">A: 6842</h3>
+        <br/>
+        <h3 class="slide">Q: The same, but with MongooseIM started?</h3>
+        <h3 class="slide">A: 16787</h3>
+        </section>
+
+        <section class="slide">
+        <h2>Tagging scheme</h2>
+        <ul>
+            <li class="slide"><code>00</code> for headers (e.g. tuple arity)</li>
+            <li class="slide"><code>01</code> for list element pointers</li>
+            <li class="slide"><code>10</code> for other pointers (to headers)</li>
+            <li class="slide"><code>11</code> for immediate values (that fit on a one word, e.g. atom)</li>
+            <li class="slide"><code>00000000 00000000 00000000 0010<strong>000011</strong></code><br/>atom with index <strong>2</strong> in the atom table</li>
+        </ul>
+        </section>
+
+        <section class="slide">
+        <h2>List representation</h2>
+        <img src="imgs/list.png">
+        </section>
+
+        <section class="slide">
+        <h2>Tuple representation</h2>
+        <img src="imgs/tuple.png">
+        </section>
+
+        <section class="slide">
+        <h2>What is code loading (in simple terms)?</h2>
+        <ul>
+            <li class="slide">load atoms</li>
+            <li class="slide">load exports</li>
+            <li class="slide">load code</li>
+            <li class="slide">fetch external functions used from the exports table</li>
+            <li class="slide">overlay all local references to the global ones</li> 
+        </ul>
+        </section>
+
+        <section class="slide">
+        <h2>Exercises</h2>
+        <ol>
+            <li class="slide">implement the atom table</li>
+            <li class="slide">implement the code table*</li>
+            <li class="slide">implement the export table</li>
+        </ol>
+        </section>
+
+        <section class="slide">
+        <h2>References</h2>
+        <ul>
+            <li><a href="https://github.com/studzien/hack-erlang-vm">Exercises</a></li>
+            <li><a href="https://github.com/studzien/bgi">BEAM Guts Inspector</a></li>
+            <li><a href="https://github.com/erlang/otp/tree/maint/lib/compiler">Erlang compiler</a></li>
+            <li><a href="http://en.wikipedia.org/wiki/Interchange_File_Format">Interchange File Format</a></li>
+            <li><a href="http://www.erlang.org/doc/man/beam_lib.html">beam_lib documentation</a></li>
+            <li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/erl_term.h">Tagging scheme</a></li>
+            <li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/atom.c">Atom table</a></li>
+            <li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/index.c">Index table</a></li>
+            <li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/beam_load.c">Loader</a></li>
+        </ul>
+        </section>
+    <!-- End slides. -->
+
+    <!-- Begin extension snippets. Add or remove as needed. -->
+
+    <!-- deck.navigation snippet -->
+    <div aria-role="navigation">
+      <a href="#" class="deck-prev-link" title="Previous">&#8592;</a>
+      <a href="#" class="deck-next-link" title="Next">&#8594;</a>
+    </div>
+
+    <!-- deck.status snippet -->
+    <p class="deck-status" aria-role="status">
+      <span class="deck-status-current"></span>
+      /
+      <span class="deck-status-total"></span>
+    </p>
+
+    <!-- deck.goto snippet -->
+    <form action="." method="get" class="goto-form">
+      <label for="goto-slide">Go to slide:</label>
+      <input type="text" name="slidenum" id="goto-slide" list="goto-datalist">
+      <datalist id="goto-datalist"></datalist>
+      <input type="submit" value="Go">
+    </form>
+
+    <!-- End extension snippets. -->
+  </div>
+
+<!-- Required JS files. -->
+<script src="jquery.min.js"></script>
+<script src="core/deck.core.js"></script>
+
+<!-- Extension JS files. Add or remove as needed. -->
+<script src="extensions/menu/deck.menu.js"></script>
+<script src="extensions/goto/deck.goto.js"></script>
+<script src="extensions/status/deck.status.js"></script>
+<script src="extensions/navigation/deck.navigation.js"></script>
+<script src="extensions/scale/deck.scale.js"></script>
+
+<!-- Initialize the deck. You can put this in an external file if desired. -->
+<script>
+  $(function() {
+    $.deck('.slide');
+  });
+</script>
+</body>
+</html>
