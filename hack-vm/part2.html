@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=1024, user-scalable=no">
+
+  <title>Hack your own Erlang VM. Episode 2.</title>
+
+  <!-- Required stylesheet -->
+  <link rel="stylesheet" media="screen" href="core/deck.core.css">
+
+  <!-- Extension CSS files go here. Remove or add as needed. -->
+  <link rel="stylesheet" media="screen" href="extensions/goto/deck.goto.css">
+  <link rel="stylesheet" media="screen" href="extensions/menu/deck.menu.css">
+  <link rel="stylesheet" media="screen" href="extensions/navigation/deck.navigation.css">
+  <link rel="stylesheet" media="screen" href="extensions/status/deck.status.css">
+  <link rel="stylesheet" media="screen" href="extensions/scale/deck.scale.css">
+
+  <!-- Style theme. More available in /themes/style/ or create your own. -->
+  <link rel="stylesheet" media="screen" href="themes/style/swiss.css">
+
+  <style>
+      span.blue {
+          color: blue;
+          font-weight: bold;
+      }
+
+      span.red {
+          color: red;
+          font-weight: bold;
+      }
+
+      span.green {
+          color:green;
+          font-weight: bold;
+      }
+  </style>
+
+  <!-- Transition theme. More available in /themes/transition/ or create your own. -->
+  <link rel="stylesheet" media="screen" href="themes/transition/fade.css">
+
+  <!-- Basic black and white print styles -->
+  <link rel="stylesheet" media="print" href="core/print.css">
+
+  <!-- Required Modernizr file -->
+  <script src="modernizr.custom.js"></script>
+</head>
+<body>
+  <div class="deck-container">
+
+    <!-- Begin slides. Just make elements with a class of slide. -->
+
+    <section class="slide">
+    <h1>Hack your own Erlang VM.</h1>
+    </section>
+
+    <section class="slide">
+        <h2>What do we have so far?</h2>
+        <ol>
+            <li class="slide">Atom table</li>
+            <li class="slide">Export table</li>
+            <li class="slide">Code table</li>
+        </ol>
+<pre class="slide"><code>git clone https://github.com/studzien/hack-erlang-vm.git -b v1</code></pre>
+    </section>
+
+    <section class="slide">
+        <h2>What do we need to make it useful?</h2>
+        <ol>
+            <li class="slide">Decode meaning of the code</li>
+            <li class="slide">Extract imports</li>
+            <li class="slide">Extract literals</li>
+            <li class="slide">Substitute local atoms</li>
+            <li class="slide">Substitute local labels</li>
+            <li class="slide">Export function entry point</li>
+            <li class="slide">Export useful code</li>
+        </ol>
+<pre class="slide"><code>git clone https://github.com/studzien/hack-erlang-vm.git -b v2</code></pre>
+    </section>
+
+    <section class="slide">
+        <h2>Opcodes (1..158)</h2>
+
+        <pre><code>1: label Lbl
+2: func_info M F A
+3: int_code_end
+4: call Arity Label
+5: call_last Arity Label Dellocate
+6: call_only Arity Label
+7: call_ext Arity Destination
+8: call_ext_last Arity Destination Deallocate
+9: bif0 Bif Reg
+10: bif1 Lbl Bif Arg Reg
+11: bif2 Lbl Bif Arg1 Arg2 Reg
+...
+</code></pre>
+        </section>
+
+    <section class="slide">
+        <h2>Yet Another Tagging Scheme</h2>
+        <h3>Used for tagging instruction arguments (3 bits)</h3>
+
+        <ul>
+            <li class="slide">index (0)</li>
+            <li class="slide">integer (1)</li>
+            <li class="slide">atom (2)</li>
+            <li class="slide">X register (3)</li>
+            <li class="slide">Y register (4)</li>
+            <li class="slide">label (5)</li>
+            <li class="slide">"complex enough" term (7)</li>
+        </ul>
+    </section>
+
+    <section class="slide">
+        <h2>Slide intentionally left blank</h2>
+    </section>
+
+    <section class="slide">
+        <h2>Stack-based VM</h2>
+        <pre><code>PUSH 20
+PUSH 5
+ADD
+// result is on the top of the stack
+// arguments are lost
+</pre></code>
+    </section>
+
+    <section class="slide">
+        <h2>Register-based VM</h2>
+        <pre><code>MOVE 20,R1
+MOVE 5,R2
+ADD R1,R2,R3
+// result is on the R3 registers
+// arguments are still in R1 and R2
+</pre></code>
+    </section>
+
+    <section class="slide">
+        <h2>Interpreter model</h2>
+
+        <ol>
+            <li class="slide">X registers (0..1023)</li>
+            <li class="slide">Y registers (stack)</li>
+            <li class="slide">Instruction Pointer</li>
+            <li class="slide">Continuation Pointer</li>
+        </ol>
+        </section>
+
+        <section class="slide">
+        <h2>Trivia time</h2>
+        <h3 class="slide">Q: What is the highest X register used by <strong>ejabberd_c2s</strong>?</h3>
+        <h3 class="slide">A: 1023</h3>
+        <br/>
+        <h3 class="slide">Q: What is the maximum number of X registers used by it at the same time?</h3>
+        <h3 class="slide">A: 16</h3>
+        </section>
+
+    <section class="slide">
+        <h2>Slide intentionally left blank</h2>
+    </section>
+
+        <section class="slide">
+            <h2>Mutators</h2>
+            <ul>
+                <li><pre><code>allocate StackN Live</code></pre></li>
+                <li><pre><code>allocate_heap StackN HeapN Live</code></pre></li>
+                <li><pre><code>allocate_zero StackN Live</code></pre></li>
+                <li><pre><code>allocate_heap_zero StackN HeapN Live</code></pre></li>
+                <li><pre><code>test_heap HeapN Live</code></pre></li>
+                <li>...</li>
+            </ul>
+        </section>
+
+        <section class="slide">
+            <h2>GC</h2>
+            <img src="imgs/gc0.png">
+        </section>
+
+        <section class="slide">
+            <h2>GC</h2>
+            <img src="imgs/gc1.png">
+        </section>
+
+        <section class="slide">
+            <h2>GC</h2>
+            <img src="imgs/gc2.png">
+        </section>
+
+        <section class="slide">
+            <h2>GC</h2>
+            <img src="imgs/gc3.png">
+        </section>
+
+        <section class="slide">
+            <h2>GC</h2>
+            <img src="imgs/gc4.png">
+        </section>
+
+        <section class="slide">
+            <h2>GC</h2>
+            <img src="imgs/gc5.png">
+        </section>
+
+        <section class="slide">
+            <h2>GC</h2>
+            <img src="imgs/gc6.png">
+        </section>
+
+        <section class="slide">
+        <h2>Exercises</h2>
+        <ol>
+            <li class="slide">implement interpreter of <code>fac</code> and <code>fac2</code></pre> modules</li>
+        </ol>
+        </section>
+
+        <section class="slide">
+        <h2>References</h2>
+        <ul>
+            <!--<li><a href="https://github.com/studzien/hack-erlang-vm">Exercises</a></li>-->
+            <!--<li><a href="https://github.com/studzien/bgi">BEAM Guts Inspector</a></li>-->
+            <!--<li><a href="https://github.com/erlang/otp/tree/maint/lib/compiler">Erlang compiler</a></li>-->
+            <!--<li><a href="http://en.wikipedia.org/wiki/Interchange_File_Format">Interchange File Format</a></li>-->
+            <!--<li><a href="http://www.erlang.org/doc/man/beam_lib.html">beam_lib documentation</a></li>-->
+            <!--<li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/erl_term.h">Tagging scheme</a></li>-->
+            <!--<li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/atom.c">Atom table</a></li>-->
+            <!--<li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/index.c">Index table</a></li>-->
+            <!--<li><a href="https://github.com/erlang/otp/blob/maint/erts/emulator/beam/beam_load.c">Loader</a></li>-->
+        </ul>
+        </section>
+    <!-- End slides. -->
+
+    <!-- Begin extension snippets. Add or remove as needed. -->
+
+    <!-- deck.navigation snippet -->
+    <div aria-role="navigation">
+      <a href="#" class="deck-prev-link" title="Previous">&#8592;</a>
+      <a href="#" class="deck-next-link" title="Next">&#8594;</a>
+    </div>
+
+    <!-- deck.status snippet -->
+    <p class="deck-status" aria-role="status">
+      <span class="deck-status-current"></span>
+      /
+      <span class="deck-status-total"></span>
+    </p>
+
+    <!-- deck.goto snippet -->
+    <form action="." method="get" class="goto-form">
+      <label for="goto-slide">Go to slide:</label>
+      <input type="text" name="slidenum" id="goto-slide" list="goto-datalist">
+      <datalist id="goto-datalist"></datalist>
+      <input type="submit" value="Go">
+    </form>
+
+    <!-- End extension snippets. -->
+  </div>
+
+<!-- Required JS files. -->
+<script src="jquery.min.js"></script>
+<script src="core/deck.core.js"></script>
+
+<!-- Extension JS files. Add or remove as needed. -->
+<script src="extensions/menu/deck.menu.js"></script>
+<script src="extensions/goto/deck.goto.js"></script>
+<script src="extensions/status/deck.status.js"></script>
+<script src="extensions/navigation/deck.navigation.js"></script>
+<script src="extensions/scale/deck.scale.js"></script>
+
+<!-- Initialize the deck. You can put this in an external file if desired. -->
+<script>
+  $(function() {
+    $.deck('.slide');
+  });
+</script>
+</body>
+</html>
